@@ -11,3 +11,8 @@ BTW, to compile you need to run:
 python3 setup.py develop
 ```
 
+For now, actually, this project doesn't work.
+The setup.py does not exist.
+The other setup file is for and old, much larger and complex project for inpainting which I keep for reference under src/inpainting3d.
+The module to be compiled is much simpler, but I need to figure which one I will use under src.
+
