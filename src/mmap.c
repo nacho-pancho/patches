@@ -1,4 +1,4 @@
-#include "paco_mmap.h"
+#include "mmap.h"
 
 void* mmap_alloc(npy_uint64 size) {
     static unsigned mmap_file_num = 0;

@@ -2,7 +2,7 @@
 
 from distutils.core import setup, Extension
 
-eca=["-fopenmp", "-O3", "-march=native", "-mtune=native"]
+eca=["-O2", "-march=native", "-mtune=native"]
 #eca=["-ggdb", "-O0", "-march=native", "-mtune=native"]
 
 setup(name             = "patches",
