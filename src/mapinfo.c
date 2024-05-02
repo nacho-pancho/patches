@@ -45,9 +45,6 @@ const mapinfo* _get_mapinfo_() {
 
 void _destroy_mapinfo_(void) {
     if (pmapinfo_singleton) {
-        if (pmapinfo_singleton->idx_incomplete_patches) {
-            free(pmapinfo_singleton->rel_idx_patch_pixels);
-        }
         free(pmapinfo_singleton);
     }
     pmapinfo_singleton = NULL;
@@ -89,15 +86,13 @@ void _init_mapinfo_(const npy_int64 _N1,
     // normalization pseudoimage (as a linear array)
     //
     if (!M) {
-        pmap->num_incomplete_patches = 0;
-        pmap->idx_incomplete_patches = NULL;
         return;
     }
-    npy_bool* pM = (npy_bool*) PyArray_DATA(M);
-    const npy_int64 ng1 = pmap->n1;
-    const npy_int64 ng2 = pmap->n2;
-    const npy_int64 s1 = pmap->s1;
-    const npy_int64 s2 = pmap->s2;
+    //npy_bool* pM = (npy_bool*) PyArray_DATA(M);
+    //const npy_int64 ng1 = pmap->n1;
+    //const npy_int64 ng2 = pmap->n2;
+    //const npy_int64 s1 = pmap->s1;
+    //const npy_int64 s2 = pmap->s2;
     const npy_int64 m1 = pmap->m1;
     const npy_int64 m2 = pmap->m2;
 

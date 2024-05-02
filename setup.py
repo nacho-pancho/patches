@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-
+import numpy as np
 from distutils.core import setup, Extension
 
 eca=["-O2", "-march=native", "-mtune=native"]
@@ -16,5 +16,6 @@ setup(name             = "patches",
           Extension(
               'patches', ['src/patches.c','src/mmap.c','src/mapinfo.c'],
               extra_compile_args=eca)
-     ]
+     ],
+     include_dirs=[np.get_include()]
 )

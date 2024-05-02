@@ -47,7 +47,7 @@ void _init_mapinfo_(const npy_int64 _N1,
                       PyArrayObject* M,
                       const npy_int64 _cov);
 
-void _linear_to__idx(npy_int64 li, npy_int32* pi1, npy_int32* pi2, npy_int32* pi3);
-npy_int64 __to_linear_idx(npy_int32 i1, npy_int32 i2, npy_int32 i3);
+void _linear_to__idx(npy_int64 li, npy_int32* pi1, npy_int32* pi2);
+npy_int64 __to_linear_idx(npy_int32 i1, npy_int32 i2);
 
 #endif

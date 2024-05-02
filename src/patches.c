@@ -1,6 +1,15 @@
 #include <Python.h>
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
+
+#if 1
+typedef npy_float32 sample_t;
+#define  SAMPLE_TYPE_ID NPY_FLOAT32
+#else
+typedef npy_float64 sample_t;
+#define  SAMPLE_TYPE_ID NPY_FLOAT64
+#endif
+
 #include <math.h>
 #include "mmap.h"
 #include "mapinfo.h"
@@ -97,12 +106,11 @@ static npy_int64 compute_grid_size(const npy_int64 size, const npy_int64 width, 
 //
 static PyObject *create_patches_matrix(PyObject *self, PyObject *args) {
     PyArrayObject *py_P;
-    npy_int64 M, N, w, s;
     // Parse arguments.
-    if(!PyArg_ParseTuple(args)) {
+    if(!PyArg_ParseTuple(args,"")) {
         return NULL;
     }
-    pmap = _get_mapinfo_()
+    const mapinfo* pmap = _get_mapinfo_();
     npy_intp dims[2] = {pmap->n,pmap->m};
     py_P = (PyArrayObject*) PyArray_SimpleNew(2,&dims[0],NPY_DOUBLE);
     return PyArray_Return(py_P);
@@ -125,18 +133,17 @@ static PyObject *create_patches_matrix_mmap(PyObject *self, PyObject *args) {
 //
 static PyObject *create_norm_matrix(PyObject *self, PyObject *args) {
     PyArrayObject *py_R;
-    npy_int64 M, N, w, s;
     // Parse arguments.
-    if(!PyArg_ParseTuple(args)) {
+    if(!PyArg_ParseTuple(args,"")) {
         return NULL;
     }
-
-    npy_intp dims[2] = {pmap->M,pmap->N};
+    const mapinfo* pmap = _get_mapinfo_();
+    npy_intp dims[2] = {pmap->N1,pmap->N2};
     py_R = (PyArrayObject*) PyArray_SimpleNew(2,dims,NPY_DOUBLE);
     PyArray_FILLWBYTE(py_R,0);
     const npy_int64 mg = pmap->n1;
     const npy_int64 ng = pmap->n2;
-    const npy_int64 s1 = pmap->map.s1;
+    const npy_int64 s1 = pmap->s1;
     const npy_int64 s2 = pmap->s2;
     const npy_int64 m1 = pmap->m1;
     const npy_int64 m2 = pmap->m2;
@@ -170,20 +177,20 @@ static PyObject *create_norm_matrix(PyObject *self, PyObject *args) {
 //
 static PyObject *pad(PyObject *self, PyObject *args) {
     PyArrayObject *py_I, *py_P;
-    npy_int64 M, N, w, s;
+    npy_int64 M, N;
     // Parse arguments.
-    if(!PyArg_ParseTuple(args, "O!ll",
-                         &PyArray_Type, &py_I, &w, &s)) {
+    if(!PyArg_ParseTuple(args, "O!",
+                         &PyArray_Type, &py_I)) {
         return NULL;
     }
     M = PyArray_DIM(py_I,0);
     N = PyArray_DIM(py_I,1);
-    mapinfo map = build_mapinfo(M,N,w,s,EXTRACT_EXACT);
     //
     // compute dimensions of padded image
     //
-    npy_int64 M2 = s*(map.ny-1) + w;
-    npy_int64 N2 = s*(map.nx-1) + w;
+    const mapinfo* map = _get_mapinfo_();
+    npy_int64 M2 = map->s1*(map->n1-1) + map->m1;
+    npy_int64 N2 = map->s2*(map->n2-1) + map->m2;
     npy_intp dims[2] = {M2,N2};
     py_P = (PyArrayObject*) PyArray_SimpleNew(2,dims,NPY_DOUBLE);
     //
@@ -202,11 +209,11 @@ static PyObject *pad(PyObject *self, PyObject *args) {
 //--------------------------------------------------------
 //
 void _stitch_(PyArrayObject* P, PyArrayObject* I, PyArrayObject* R) {
-    mapinfo* map = _get_mapinfo_();
-    const npy_int64 M = map->M;
-    const npy_int64 N = map->N;
-    const npy_int64 mg = map->ny;
-    const npy_int64 ng = map->nx;
+    const mapinfo* map = _get_mapinfo_();
+    const npy_int64 M = map->N1;
+    const npy_int64 N = map->N2;
+    const npy_int64 mg = map->n1;
+    const npy_int64 ng = map->n2;
     const npy_int64 s1 = map->s1;
     const npy_int64 s2 = map->s2;
     const npy_int64 m1 = map->m1;
@@ -239,7 +246,6 @@ void _stitch_(PyArrayObject* P, PyArrayObject* I, PyArrayObject* R) {
 
 static PyObject *stitch(PyObject *self, PyObject *args) {
     PyArrayObject *py_P, *py_I, *py_R;
-    npy_int64 M, N, w, s;
     // Parse arguments.
     if(!PyArg_ParseTuple(args, "O!O!",
                          &PyArray_Type, &py_P,
@@ -247,9 +253,9 @@ static PyObject *stitch(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    mapinfo* map = _get_mapinfo_();
-    const npy_int64 M = map->M;
-    const npy_int64 N = map->N;
+    const mapinfo* map = _get_mapinfo_();
+    const npy_int64 M = map->N1;
+    const npy_int64 N = map->N2;
     npy_intp dims[2] = {M,N};
     py_I = (PyArrayObject*) PyArray_SimpleNew(2,dims,NPY_DOUBLE);
     PyArray_FILLWBYTE(py_I,0);
@@ -281,9 +287,10 @@ static PyObject *stitch_to(PyObject *self, PyObject *args) {
 // extract
 //--------------------------------------------------------
 //
-int _extract_(PyArrayObject* I, mapinfo* map, PyArrayObject* P) {
-    const npy_int64 mg = map->ny;
-    const npy_int64 ng = map->nx;
+int _extract_(PyArrayObject* I, PyArrayObject* P) {
+    const mapinfo* map = _get_mapinfo_();
+    const npy_int64 mg = map->n1;
+    const npy_int64 ng = map->n2;
     const npy_int64 s1 = map->s1;
     const npy_int64 s2 = map->s2;
     const npy_int64 m1 = map->m1;
@@ -310,7 +317,6 @@ int _extract_(PyArrayObject* I, mapinfo* map, PyArrayObject* P) {
 
 static PyObject *extract_to(PyObject *self, PyObject *args) {
     PyArrayObject *py_P, *py_I;
-    npy_int64 M, N, w, s;
 
     // Parse arguments.
     if(!PyArg_ParseTuple(args, "O!O!", &PyArray_Type, &py_I, &PyArray_Type, &py_P)){
@@ -322,7 +328,6 @@ static PyObject *extract_to(PyObject *self, PyObject *args) {
 
 static PyObject *extract(PyObject *self, PyObject *args) {
     PyArrayObject *py_P, *py_I;
-    npy_int64 M, N, w, s;
 
     // Parse arguments.
     if(!PyArg_ParseTuple(args, "O!",
@@ -331,33 +336,9 @@ static PyObject *extract(PyObject *self, PyObject *args) {
       ) {
         return NULL;
     }
-    mapinfo* map = _get_mapinfo();
+    const mapinfo* map = _get_mapinfo_();
     npy_intp dims[2] = {map->n,map->m};
     py_P = (PyArrayObject*) PyArray_SimpleNew(2,&dims[0],NPY_DOUBLE);
     _extract_(py_I,py_P);
     return PyArray_Return(py_P);
-}
-
-//
-//*****************************************************************************
-//  Python/NumPy -- C adaptor functions
-//*****************************************************************************
-
-static PyObject *init_mapinfo(PyObject *self, PyObject *args) {
-    PyArrayObject* pM;
-    npy_int64 N1,N2,w1,w2,s1,s2,cov;
-
-    // Parse arguments.
-    if(!PyArg_ParseTuple(args, "llllllO!l",&N1,&N2,&w1,&w2,&s1,&s2,&PyArray_Type,&pM,&cov)) {
-        return NULL;
-    }
-    _init_mapinfo_(N1,N2,w1,w2,s1,s2,pM,cov);
-    Py_RETURN_NONE;
-}
-
-//---------------------------------------------------------------------------------------
-
-static PyObject *destroy_mapinfo(PyObject *self, PyObject *args) {
-    _destroy_mapinfo_();
-    Py_RETURN_NONE;
 }
