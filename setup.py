@@ -14,7 +14,7 @@ setup(name             = "patches",
       url              = "https://iie.fing.edu.uy/personal/nacho/",
       ext_modules      = [
           Extension(
-              'patches', ['src/patches.c','src/mmap.c'],
+              'patches', ['src/patches.c','src/mmap.c','src/mapinfo.c'],
               extra_compile_args=eca)
      ]
 )

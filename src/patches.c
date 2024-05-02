@@ -3,41 +3,17 @@
 #include <numpy/arrayobject.h>
 #include <math.h>
 #include "mmap.h"
+#include "mapinfo.h"
 ///
 /// Contains all the relevant parameters  about the patch decomposition procedure.
 ///
-#define CCLIP(x,a,b) ( (x) > (a) ? ( (x) < (b) ? (x) : (b) ) : (a) )
-#define UCLIP(x,a) ( (x) < (a) ? (x) : (a)-1 )
-
-typedef enum {
-    EXTRACT_EXACT =0, ///< only extract patches which contain true pixels, possibly leaving bordering pixels out
-    EXTRACT_FULL, ///<  extract patches so that whole image is covered, extrapolating border pixels as needed
-} extract_t;
-
-typedef struct mapinfo_s {
-    npy_int64 M; ///< size of signal along dim1; provided
-    npy_int64 N; ///< size of signal along dim1; provided
-    npy_int64 L; ///< signal linear length = M*N
-    npy_int64 stride1; ///< stride  along dim1, provided
-    npy_int64 stride2; ///< stride along dim2, provided
-    npy_int64 covering; ///< signal covering strategy provided
-    npy_int64 width1; ///< width of patches along dim1, provided, possibly corrected
-    npy_int64 width2; ///< width of patches along dim2, provided, possibly corrected
-    npy_int64 m; ///< patch space dimension; computed
-    npy_int64 nx; ///< number of patches along dim 2; computed
-    npy_int64 ny; ///< number of patches along dim 2; computed
-    npy_int64 n; ///< number of patches; computed
-    npy_int64 l; ///< patches matrix linear length
-} mapinfo;
-
-mapinfo build_mapinfo(const npy_int64 _M,
-                      const npy_int64 _N,
-                      const npy_int64 _w,
-                      const npy_int64 _s,
-                      const npy_int64 _cov);
 
 
 /// Python adaptors
+static PyObject *init_mapinfo              (PyObject* self, PyObject* args);
+static PyObject *destroy_mapinfo           (PyObject* self, PyObject* args);
+static PyObject *create_patches_matrix_mmap(PyObject* self, PyObject* args);
+static PyObject *create_patches_matrix_mmap(PyObject* self, PyObject* args);
 static PyObject *create_patches_matrix(PyObject* self, PyObject* args);
 static PyObject *create_norm_matrix   (PyObject* self, PyObject* args);
 static PyObject *extract              (PyObject *self, PyObject *args);
@@ -56,8 +32,11 @@ static PyObject *pad                  (PyObject *self, PyObject *args);
 //--------------------------------------------------------
 //
 static PyMethodDef methods[] = {
+    { "init_mapinfo",               init_mapinfo, METH_VARARGS, "bla"},
+    { "destroy_mapinfo",            destroy_mapinfo, METH_NOARGS, "bla"},
     { "create_patches_matrix", create_patches_matrix, METH_VARARGS, "Creates a matrix for allocating patches."},
     { "create_norm_matrix", create_norm_matrix, METH_VARARGS, "Creates a normalization matrix for using when stitching. Only one such matrix is needed for each combination of signal dimensions, width and stride ."},
+    { "create_patches_matrix_mmap", create_patches_matrix_mmap, METH_NOARGS,"."},
     { "extract", extract, METH_VARARGS, "Extracts patches from a signal to a new patches matrix"},
     { "extract_to", extract_to, METH_VARARGS, "Extracts patches from a signal to a preallocated patches matrix."},
     { "stitch", stitch, METH_VARARGS, "Stitches patches into a new signal.."},
@@ -74,6 +53,30 @@ PyMODINIT_FUNC PyInit_patches(void) {
   Py_Initialize();
   return PyModule_Create(&module);
 }
+
+//---------------------------------------------------------------------------------------
+// mapping information; instantiated only once
+//---------------------------------------------------------------------------------------
+
+static PyObject *init_mapinfo(PyObject *self, PyObject *args) {
+    PyArrayObject* pM;
+    npy_int64 N1,N2,w1,w2,s1,s2,cov;
+
+    // Parse arguments.
+    if(!PyArg_ParseTuple(args, "llllllO!l",&N1,&N2,&w1,&w2,&s1,&s2,&PyArray_Type,&pM,&cov)) {
+        return NULL;
+    }
+    _init_mapinfo_(N1,N2,w1,w2,s1,s2,pM,cov);
+    Py_RETURN_NONE;
+}
+
+//---------------------------------------------------------------------------------------
+
+static PyObject *destroy_mapinfo(PyObject *self, PyObject *args) {
+    _destroy_mapinfo_();
+    Py_RETURN_NONE;
+}
+
 //
 //--------------------------------------------------------
 // compute size of patches grid
@@ -96,20 +99,25 @@ static PyObject *create_patches_matrix(PyObject *self, PyObject *args) {
     PyArrayObject *py_P;
     npy_int64 M, N, w, s;
     // Parse arguments.
-    if(!PyArg_ParseTuple(args, "llll",
-                         &M,
-                         &N,
-                         &w,
-                         &s
-                        )) {
+    if(!PyArg_ParseTuple(args)) {
         return NULL;
     }
-
-    mapinfo map = build_mapinfo(M,N,w,s,EXTRACT_EXACT);
-    npy_intp dims[2] = {map.n,map.m};
+    pmap = _get_mapinfo_()
+    npy_intp dims[2] = {pmap->n,pmap->m};
     py_P = (PyArrayObject*) PyArray_SimpleNew(2,&dims[0],NPY_DOUBLE);
     return PyArray_Return(py_P);
 }
+
+static PyObject *create_patches_matrix_mmap(PyObject *self, PyObject *args) {
+    PyArrayObject *py_P;
+    const mapinfo* pmap = _get_mapinfo_();
+    npy_intp dims[2] = {pmap->n,pmap->m};
+    npy_int64 size = pmap->n*pmap->m*sizeof(sample_t);
+    void* data = mmap_alloc(size);
+    py_P = (PyArrayObject*) PyArray_SimpleNewFromData(2,&dims[0],SAMPLE_TYPE_ID, data);
+    return PyArray_Return(py_P);
+}
+
 //
 //--------------------------------------------------------
 // create normalization matrix
@@ -119,30 +127,24 @@ static PyObject *create_norm_matrix(PyObject *self, PyObject *args) {
     PyArrayObject *py_R;
     npy_int64 M, N, w, s;
     // Parse arguments.
-    if(!PyArg_ParseTuple(args, "llll",
-                         &M,
-                         &N,
-                         &w,
-                         &s
-                        )) {
+    if(!PyArg_ParseTuple(args)) {
         return NULL;
     }
 
-    mapinfo map = build_mapinfo(M,N,w,s,EXTRACT_EXACT);
-    npy_intp dims[2] = {M,N};
+    npy_intp dims[2] = {pmap->M,pmap->N};
     py_R = (PyArrayObject*) PyArray_SimpleNew(2,dims,NPY_DOUBLE);
     PyArray_FILLWBYTE(py_R,0);
-    const npy_int64 mg = map.ny;
-    const npy_int64 ng = map.nx;
-    const npy_int64 stride1 = map.stride1;
-    const npy_int64 stride2 = map.stride2;
-    const npy_int64 width1 = map.width1;
-    const npy_int64 width2 = map.width2;
+    const npy_int64 mg = pmap->n1;
+    const npy_int64 ng = pmap->n2;
+    const npy_int64 s1 = pmap->map.s1;
+    const npy_int64 s2 = pmap->s2;
+    const npy_int64 m1 = pmap->m1;
+    const npy_int64 m2 = pmap->m2;
 
-    for (npy_int64 ig = 0, i = 0, k = 0; ig < mg; ++ig, i += stride1) { // k = patch index
-        for (npy_int64 jg = 0, j = 0; jg < ng; ++jg, ++k, j += stride2) {
-            for (npy_int64 ii = 0, l = 0; ii < width1; ++ii) {
-                for (npy_int64 jj = 0; jj < width2; ++l, ++jj) { // l = dimension within patch
+    for (npy_int64 ig = 0, i = 0, k = 0; ig < mg; ++ig, i += s1) { // k = patch index
+        for (npy_int64 jg = 0, j = 0; jg < ng; ++jg, ++k, j += s2) {
+            for (npy_int64 ii = 0, l = 0; ii < m1; ++ii) {
+                for (npy_int64 jj = 0; jj < m2; ++l, ++jj) { // l = dimension within patch
                     *((npy_double*)PyArray_GETPTR2(py_R,i+ii,j+jj)) += 1.0; // increase number of copies of this pixel
                 } // for ii
             }// for jj
@@ -199,28 +201,29 @@ static PyObject *pad(PyObject *self, PyObject *args) {
 // stitch
 //--------------------------------------------------------
 //
-void _stitch_(PyArrayObject* P, mapinfo* map, PyArrayObject* I, PyArrayObject* R) {
+void _stitch_(PyArrayObject* P, PyArrayObject* I, PyArrayObject* R) {
+    mapinfo* map = _get_mapinfo_();
     const npy_int64 M = map->M;
     const npy_int64 N = map->N;
     const npy_int64 mg = map->ny;
     const npy_int64 ng = map->nx;
-    const npy_int64 stride1 = map->stride1;
-    const npy_int64 stride2 = map->stride2;
-    const npy_int64 width1 = map->width1;
-    const npy_int64 width2 = map->width2;
+    const npy_int64 s1 = map->s1;
+    const npy_int64 s2 = map->s2;
+    const npy_int64 m1 = map->m1;
+    const npy_int64 m2 = map->m2;
 
     npy_int64 k = 0;
     npy_int64 i = 0;
     for (npy_int64 ig = 0; ig < mg; ++ig) {
-        for (npy_int64 jg = 0, j = 0; jg < ng; ++k, ++jg, j += stride2) {
-            for (npy_int64 ii = 0, l = 0; ii < width1; ++ii) {
-                for (npy_int64 jj = 0; jj < width2; ++l, ++jj) {
+        for (npy_int64 jg = 0, j = 0; jg < ng; ++k, ++jg, j += s2) {
+            for (npy_int64 ii = 0, l = 0; ii < m1; ++ii) {
+                for (npy_int64 jj = 0; jj < m2; ++l, ++jj) {
                     npy_double* pIij = (npy_double*)PyArray_GETPTR2(I,i+ii,j+jj);
                     *pIij += *((npy_double*)PyArray_GETPTR2(P,k,l));
                 } // for ii
             }// for jj
         } // for jg
-        i+= stride1;
+        i+= s1;
     } // for ig
     //
     // normalization
@@ -238,21 +241,19 @@ static PyObject *stitch(PyObject *self, PyObject *args) {
     PyArrayObject *py_P, *py_I, *py_R;
     npy_int64 M, N, w, s;
     // Parse arguments.
-    if(!PyArg_ParseTuple(args, "llllO!O!",
-                         &M,
-                         &N,
-                         &w,
-                         &s,
+    if(!PyArg_ParseTuple(args, "O!O!",
                          &PyArray_Type, &py_P,
                          &PyArray_Type, &py_R)) {
         return NULL;
     }
 
-    mapinfo map = build_mapinfo(M,N,w,s,EXTRACT_EXACT);
+    mapinfo* map = _get_mapinfo_();
+    const npy_int64 M = map->M;
+    const npy_int64 N = map->N;
     npy_intp dims[2] = {M,N};
     py_I = (PyArrayObject*) PyArray_SimpleNew(2,dims,NPY_DOUBLE);
     PyArray_FILLWBYTE(py_I,0);
-    _stitch_(py_P,&map,py_I,py_R);
+    _stitch_(py_P,py_I,py_R);
     return PyArray_Return(py_I);
 }
 //
@@ -262,22 +263,15 @@ static PyObject *stitch(PyObject *self, PyObject *args) {
 //
 static PyObject *stitch_to(PyObject *self, PyObject *args) {
     PyArrayObject *py_P, *py_I, *py_R;
-    npy_int64 M, N, w, s;
     // Parse arguments.
-    if(!PyArg_ParseTuple(args, "llllO!O!O!",
-                         &M,
-                         &N,
-                         &w,
-                         &s,
+    if(!PyArg_ParseTuple(args, "O!O!",
                          &PyArray_Type, &py_P,
                          &PyArray_Type, &py_I,
                          &PyArray_Type, &py_R)) {
         return NULL;
     }
-
-    mapinfo map = build_mapinfo(M,N,w,s,EXTRACT_EXACT);
     PyArray_FILLWBYTE(py_I,0);
-    _stitch_(py_P,&map,py_I,py_R);
+    _stitch_(py_P,py_I,py_R);
 
     Py_RETURN_NONE;
 }
@@ -290,25 +284,25 @@ static PyObject *stitch_to(PyObject *self, PyObject *args) {
 int _extract_(PyArrayObject* I, mapinfo* map, PyArrayObject* P) {
     const npy_int64 mg = map->ny;
     const npy_int64 ng = map->nx;
-    const npy_int64 stride1 = map->stride1;
-    const npy_int64 stride2 = map->stride2;
-    const npy_int64 width1 = map->width1;
-    const npy_int64 width2 = map->width2;
+    const npy_int64 s1 = map->s1;
+    const npy_int64 s2 = map->s2;
+    const npy_int64 m1 = map->m1;
+    const npy_int64 m2 = map->m2;
 
     npy_int64 k = 0, i = 0;
     //#ifdef _OPENMP
     //#pragma omp parallel for
     //#endif
     for (npy_int64 ig = 0; ig < mg; ++ig) { // k = patch index
-        for (npy_int64 jg = 0, j = 0; jg < ng; ++jg, ++k, j += stride2) {
-            for (npy_int64 ii = 0, l = 0; ii < width1; ++ii) {
-                for (npy_int64 jj = 0; jj < width2; ++l, ++jj) { // l = dimension within patch
+        for (npy_int64 jg = 0, j = 0; jg < ng; ++jg, ++k, j += s2) {
+            for (npy_int64 ii = 0, l = 0; ii < m1; ++ii) {
+                for (npy_int64 jj = 0; jj < m2; ++l, ++jj) { // l = dimension within patch
                     const npy_double* aux = (npy_double*)PyArray_GETPTR2(I, i+ii, j+jj);
                     *((npy_double*)PyArray_GETPTR2(P,k,l)) =  *aux;
                 } // for ii
             }// for jj
         } // for jg
-        i += stride1;
+        i += s1;
     } // for ig
 
     return 1;
@@ -319,20 +313,10 @@ static PyObject *extract_to(PyObject *self, PyObject *args) {
     npy_int64 M, N, w, s;
 
     // Parse arguments.
-    if(!PyArg_ParseTuple(args, "llllO!O!",
-                         &M,
-                         &N,
-                         &w,
-                         &s,
-                         &PyArray_Type, &py_I,
-                         &PyArray_Type, &py_P
-                        )
-      ) {
+    if(!PyArg_ParseTuple(args, "O!O!", &PyArray_Type, &py_I, &PyArray_Type, &py_P)){
         return NULL;
     }
-    mapinfo map = build_mapinfo(M,N,w,s,EXTRACT_EXACT);
-
-    _extract_(py_I,&map,py_P);
+    _extract_(py_I,py_P);
     Py_RETURN_NONE;
 }
 
@@ -341,20 +325,16 @@ static PyObject *extract(PyObject *self, PyObject *args) {
     npy_int64 M, N, w, s;
 
     // Parse arguments.
-    if(!PyArg_ParseTuple(args, "llllO!",
-                         &M,
-                         &N,
-                         &w,
-                         &s,
+    if(!PyArg_ParseTuple(args, "O!",
                          &PyArray_Type, &py_I
                         )
       ) {
         return NULL;
     }
-    mapinfo map = build_mapinfo(M,N,w,s,EXTRACT_EXACT);
-    npy_intp dims[2] = {map.n,map.m};
+    mapinfo* map = _get_mapinfo();
+    npy_intp dims[2] = {map->n,map->m};
     py_P = (PyArrayObject*) PyArray_SimpleNew(2,&dims[0],NPY_DOUBLE);
-    _extract_(py_I,&map,py_P);
+    _extract_(py_I,py_P);
     return PyArray_Return(py_P);
 }
 
@@ -363,26 +343,21 @@ static PyObject *extract(PyObject *self, PyObject *args) {
 //  Python/NumPy -- C adaptor functions
 //*****************************************************************************
 
-mapinfo build_mapinfo(const npy_int64 _M,
-                      const npy_int64 _N,
-                      const npy_int64 _w,
-                      const npy_int64 _s,
-                      const npy_int64 _cov) {
-    mapinfo map;
-    map.M = _M;
-    map.N = _N;
-    map.L = _M*_N;
-    map.stride1 = _s;
-    map.stride2 = _s;
-    map.covering = _cov;
-    map.width1 = _w > _M ? _M : _w;
-    map.width2 = _w > _N ? _N : _w;
-    map.m = map.width1*map.width2;
-    map.nx = compute_grid_size(map.N,map.width2,map.stride2,map.covering);
-    map.ny = compute_grid_size(map.M,map.width1,map.stride1,map.covering);
-    map.n = map.nx*map.ny;
-    map.l = map.m*map.n;
-    return map;
+static PyObject *init_mapinfo(PyObject *self, PyObject *args) {
+    PyArrayObject* pM;
+    npy_int64 N1,N2,w1,w2,s1,s2,cov;
+
+    // Parse arguments.
+    if(!PyArg_ParseTuple(args, "llllllO!l",&N1,&N2,&w1,&w2,&s1,&s2,&PyArray_Type,&pM,&cov)) {
+        return NULL;
+    }
+    _init_mapinfo_(N1,N2,w1,w2,s1,s2,pM,cov);
+    Py_RETURN_NONE;
 }
 
+//---------------------------------------------------------------------------------------
 
+static PyObject *destroy_mapinfo(PyObject *self, PyObject *args) {
+    _destroy_mapinfo_();
+    Py_RETURN_NONE;
+}
